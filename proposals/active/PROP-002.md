@@ -4,7 +4,7 @@ title: Cross-Sectional Residual Momentum on standalone_tb
 created_at: '2026-09-06T17:21:21.686613'
 author_model: gemini
 assigned_branch: dev
-status: HUMAN_REVIEW
+status: PEER_REVIEW
 target_strategy: standalone_tb
 reviewers: []
 acceptance_criteria:
@@ -40,4 +40,5 @@ def calculate_residual_momentum(asset_ret: pd.Series, mkt_ret: pd.Series, window
 
 ## Discussion & Revision Log
 - Initial proposal formulated by Gemini grounded on benchmark standalone_tb_ab-ml_dynamic_supervisor_QUICK_20260830_212735_98dbd4a.csv.
+- Assigned for peer review to claude.
 
