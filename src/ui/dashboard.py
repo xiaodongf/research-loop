@@ -193,14 +193,31 @@ with tab_cockpit:
                 st.rerun()
 
         with c_content:
-            st.markdown("#### Hypothesis")
-            st.info(proposal.hypothesis)
+            # Baseline benchmark card
+            res_dir = Path(eval_conf.get("results_dir", ROOT_DIR / "evaluation" / "outputs" / "results"))
+            base_metrics = ContextBuilder.get_recent_baseline_metrics(res_dir, proposal.metadata.target_strategy)
+            if base_metrics:
+                st.markdown("#### 📊 Empirical Baseline Context & Acceptance Gate")
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("Baseline Top-1 Precision", f"{base_metrics.get('top1_precision', 0.0):.2f}%")
+                b2.metric("Baseline Total PnL", f"{base_metrics.get('total_pnl', 0.0):+.2f}%")
+                b3.metric("Baseline Win Rate", f"{base_metrics.get('win_rate', 0.0):.2f}%")
+                b4.metric("Worst Fold PnL", f"{base_metrics.get('worst_fold', 0.0):+.2f}%")
+                st.caption(
+                    f"Verified Benchmark: `{base_metrics.get('csv_file')}` ({base_metrics.get('num_folds', 0)} walk-forward folds) | "
+                    f"Gate Mode: `{proposal.metadata.acceptance_criteria.eval_mode}` (Target $\\Delta$PnL: $\\ge {proposal.metadata.acceptance_criteria.min_pnl_delta:+.1f}\\%$)"
+                )
+                st.divider()
+
+            st.markdown("#### 🔬 Algorithmic Hypothesis")
+            st.markdown(proposal.hypothesis)
 
             if proposal.implementation_spec:
-                st.markdown("#### Implementation Spec")
-                st.code(proposal.implementation_spec, language="markdown")
+                st.markdown("#### 🛠️ Implementation Specification & Code Changes")
+                st.markdown(proposal.implementation_spec)
 
-            st.markdown("#### Multi-Model Discussion & Audit Thread")
+            st.divider()
+            st.markdown("#### 💬 Multi-Model Discussion & Audit Thread")
             if proposal.discussion_log:
                 st.markdown(proposal.discussion_log)
             else:
@@ -213,51 +230,52 @@ with tab_generate:
     st.subheader("💡 Grounded Algorithmic Ideation Engine")
     st.markdown("Generate mathematically motivated, testable algorithmic RFCs grounded in codebase topology, recent baseline metrics, and negative knowledge base.")
 
-    with st.form("ideation_form"):
-        f_author = st.selectbox("Author Model:", [ModelName.GEMINI.value, ModelName.CLAUDE.value, ModelName.CHATGPT.value])
-        f_strategy = st.selectbox("Target Strategy:", [s.value for s in StrategyTarget])
-        f_theme = st.selectbox("Research Directive / Theme:", [
-            "Volatility scaling & normalization (Parkinson / Garman-Klass)",
-            "Dynamic regime filtering (Bull/Bear x Hi/Lo vol)",
-            "Stop-loss & profit-target barrier calibration",
-            "Quantile ranking feature expansion & volume signals",
-            "Overfitting & lookahead audit fix",
-            "Open discovery hypothesis",
-        ])
-        submitted = st.form_submit_button("Generate Proposal RFC", type="primary")
+    f_author = st.selectbox("Author Model:", [ModelName.GEMINI.value, ModelName.CLAUDE.value, ModelName.CHATGPT.value], key="gen_author")
+    f_strategy = st.selectbox("Target Strategy:", [s.value for s in StrategyTarget], key="gen_strat")
+    f_theme = st.selectbox("Research Directive / Theme:", [
+        "Volatility scaling & normalization (Parkinson / Garman-Klass)",
+        "Dynamic regime filtering (Bull/Bear x Hi/Lo vol)",
+        "Stop-loss & profit-target barrier calibration",
+        "Quantile ranking feature expansion & volume signals",
+        "Overfitting & lookahead audit fix",
+        "Open discovery hypothesis",
+    ], key="gen_theme")
 
-    if submitted:
-        with st.spinner("Assembling context packet and constructing RFC..."):
+    res_dir = Path(eval_conf.get("results_dir", ROOT_DIR / "evaluation" / "outputs" / "results"))
+    cur_metrics = ContextBuilder.get_recent_baseline_metrics(res_dir, StrategyTarget(f_strategy))
+    if cur_metrics:
+        with st.container(border=True):
+            st.markdown("##### 📈 Current Verified Baseline Context (What the Model Targets)")
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Top-1 Precision", f"{cur_metrics.get('top1_precision', 0.0):.2f}%")
+            g2.metric("Total PnL", f"{cur_metrics.get('total_pnl', 0.0):+.2f}%")
+            g3.metric("Win Rate", f"{cur_metrics.get('win_rate', 0.0):.2f}%")
+            g4.metric("Worst Fold PnL", f"{cur_metrics.get('worst_fold', 0.0):+.2f}%")
+            st.caption(f"Source Benchmark: `{cur_metrics.get('csv_file')}` | Folds: {cur_metrics.get('num_folds', 0)}")
+
+    if st.button("🚀 Generate Proposal RFC with Grounded Ideation Engine", type="primary", use_container_width=True):
+        with st.spinner(f"Querying {f_author.title()} with grounded baseline context and assembling RFC..."):
             author_m = ModelName(f_author)
             strat_m = StrategyTarget(f_strategy)
-            res_dir = Path(eval_conf.get("results_dir", ROOT_DIR / "evaluation" / "outputs" / "results"))
-            
-            context = ContextBuilder.build(strategy=strat_m, results_dir=res_dir, rejected_dir=pm.rejected_dir)
             next_id = pm.get_next_proposal_id()
-            prompt = PromptBuilder.create_ideation_prompt(
+            api_key = st.session_state.get("gemini_api_key")
+
+            from src.core.ideation import IdeationEngine
+            new_prop = IdeationEngine.generate_proposal(
                 author_model=author_m,
                 strategy=strat_m,
                 theme=f_theme,
-                context=context,
+                results_dir=res_dir,
+                rejected_dir=pm.rejected_dir,
                 next_id=next_id,
-            )
-
-            branch_map = {"gemini": "dev", "claude": "claude", "chatgpt": "chatgpt"}
-            new_prop = pm.create_proposal(
-                title=f"{f_theme.split('(')[0].strip()} on {f_strategy}",
-                author_model=author_m,
-                target_strategy=strat_m,
-                assigned_branch=branch_map.get(f_author, "dev"),
-                hypothesis=f"Algorithmic enhancement under research theme: {f_theme}. Targets improved precision and risk-adjusted return.",
-                proposed_files=["data_access/features.py", "evaluation/configs.py"],
-                implementation_spec=f"1. Implement {f_theme} in features.py\n2. Configure RunConfig in evaluation/configs.py\n3. Register --ab variant.",
+                api_key=api_key,
             )
             ProposalStateMachine.submit_to_human(new_prop)
             pm.save_proposal(new_prop)
 
             st.success(f"Generated proposal **{new_prop.id}**: *{new_prop.metadata.title}*")
-            st.markdown(f"Status: `{new_prop.status.value}`. Check the Review Cockpit to inspect and approve!")
-            st.expander("View Grounded Ideation Prompt").code(prompt)
+            st.markdown(f"Status: `{new_prop.status.value}`. Check the Review Cockpit to inspect full details and approve!")
+            st.rerun()
 
 # -------------------------------------------------------------
 # TAB 4: A/B Scorecard Visualizer

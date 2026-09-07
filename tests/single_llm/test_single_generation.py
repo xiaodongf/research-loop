@@ -128,3 +128,57 @@ Some hypothesis.
 """
     with pytest.raises(SchemaValidationError):
         pm.parse_raw_llm_response(bad_output_2, default_author=ModelName.CLAUDE)
+
+
+def test_ideation_engine_baseline_metrics_extraction(tmp_path):
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    sample_csv = results_dir / "standalone_tb_ab-test_QUICK_20260906.csv"
+    sample_csv.write_text(
+        "fold,regime,spy,base_n,base_win,base_total_return,base_prec1,var_n,var_win,var_total_return,var_prec1\n"
+        "fold_1,Bull-Hi,0.0,10,0.60,15.0,32.0,10,0.65,20.0,35.0\n"
+        "fold_2,Bear-Hi,0.0,10,0.55,-5.0,28.0,10,0.58,2.0,30.0\n"
+    )
+
+    metrics = ContextBuilder.get_recent_baseline_metrics(results_dir, StrategyTarget.STANDALONE_TB)
+    assert metrics["csv_file"] == sample_csv.name
+    assert metrics["strategy"] == "standalone_tb"
+    assert metrics["num_folds"] == 2
+    assert metrics["top1_precision"] == 30.0
+    assert metrics["total_pnl"] == 10.0
+    assert metrics["win_rate"] == 57.5
+    assert metrics["worst_fold"] == -5.0
+
+
+def test_ideation_engine_grounded_generation(tmp_path):
+    from src.core.ideation import IdeationEngine
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    sample_csv = results_dir / "standalone_tb_ab-test_QUICK_20260906.csv"
+    sample_csv.write_text(
+        "fold,regime,spy,base_n,base_win,base_total_return,base_prec1,var_n,var_win,var_total_return,var_prec1\n"
+        "fold_1,Bull-Hi,0.0,10,0.60,15.0,32.0,10,0.65,20.0,35.0\n"
+    )
+
+    rejected_dir = tmp_path / "rejected"
+    rejected_dir.mkdir()
+
+    prop = IdeationEngine.generate_proposal(
+        author_model=ModelName.GEMINI,
+        strategy=StrategyTarget.STANDALONE_TB,
+        theme="Volatility scaling & normalization (Parkinson / Garman-Klass)",
+        results_dir=results_dir,
+        rejected_dir=rejected_dir,
+        next_id="PROP-010",
+    )
+
+    assert prop.id == "PROP-010"
+    assert prop.metadata.author_model == ModelName.GEMINI
+    assert prop.metadata.assigned_branch == "dev"
+    assert "Garman-Klass" in prop.metadata.title
+    assert "32.00%" in prop.hypothesis
+    assert "\\sigma_{GK}^2" in prop.hypothesis
+    assert "calculate_garman_klass_vol" in prop.implementation_spec
+    assert prop.metadata.acceptance_criteria.min_pnl_delta == 2.0
+

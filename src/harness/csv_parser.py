@@ -33,6 +33,10 @@ class CSVParser:
         m = re.match(r"([a-zA-Z0-9_]+)_ab-([a-zA-Z0-9_]+)_([A-Z0-9\+]+)_(\d{8}_\d{6})_([a-zA-Z0-9]+)\.csv", fname)
         if m:
             strategy, variant, fold_set, timestamp, git_commit = m.groups()
+        elif "_ab-" in fname:
+            strategy = fname.split("_ab-")[0]
+            rest = fname.split("_ab-")[1].replace(".csv", "")
+            variant = rest.split("_")[0]
         else:
             # Fallback simple split
             parts = fname.replace(".csv", "").split("_")
