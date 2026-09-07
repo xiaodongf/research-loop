@@ -257,6 +257,7 @@ class IdeationEngine:
         rejected_dir: Path,
         next_id: str,
         api_key: Optional[str] = None,
+        model_name: Optional[str] = "gemini-3.8-flash",
     ) -> Proposal:
         from src.core.schema import ProposalMetadata, AcceptanceCriteria, ProposalStatus
 
@@ -274,7 +275,13 @@ class IdeationEngine:
 
         # 1. Try Live LLM Call if Gemini & Key Available
         if author_model == ModelName.GEMINI and effective_key:
-            for model_candidate in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"]:
+            target_model = model_name or "gemini-3.8-flash"
+            candidates = [target_model]
+            for fallback in ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
+                if fallback not in candidates:
+                    candidates.append(fallback)
+
+            for model_candidate in candidates:
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=effective_key)

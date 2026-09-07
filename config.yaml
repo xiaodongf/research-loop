@@ -3,6 +3,7 @@ workspaces:
     name: "Gemini (Antigravity)"
     path: "/home/xiaodong/workspace/trading"
     branch: "dev"
+    model: "gemini-3.8-flash"
     role: "Core strategy innovation & feature engineering"
   claude:
     name: "Claude Code"

@@ -87,9 +87,16 @@ input_key = st.sidebar.text_input(
     type="password",
     help="Used for live LLM ideation via Google Gemini API. If omitted, uses deterministic walk-forward econometric grounding."
 )
+gemini_model = st.sidebar.selectbox(
+    "Gemini Model:",
+    ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+    index=0,
+    help="Defaulted to gemini-3.8-flash per configuration."
+)
+st.session_state["gemini_model"] = gemini_model
 if input_key:
     st.session_state["gemini_api_key"] = input_key
-    st.sidebar.caption("🟢 **Gemini Live API**: Active")
+    st.sidebar.caption(f"🟢 **Gemini Live API**: Active (`{gemini_model}`)")
 else:
     st.sidebar.caption("🔵 **Engine Mode**: Offline Econometric Grounding")
 
@@ -269,15 +276,16 @@ with tab_generate:
             st.caption(f"Source Benchmark: `{cur_metrics.get('csv_file')}` | Folds: {cur_metrics.get('num_folds', 0)}")
 
     active_key = st.session_state.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    sel_model = st.session_state.get("gemini_model", "gemini-3.8-flash")
     if f_author == ModelName.GEMINI.value and active_key:
-        st.success("🟢 **Live Gemini API Connected**: Generation will invoke Google Gemini (`gemini-1.5-flash` / `gemini-1.5-pro`) grounded on empirical backtest metrics.")
+        st.success(f"🟢 **Live Gemini API Connected**: Generation will invoke Google Gemini (`{sel_model}`) grounded on empirical backtest metrics.")
     elif f_author == ModelName.GEMINI.value:
-        st.info("🔵 **Deterministic Econometric Mode**: No `GEMINI_API_KEY` provided. Generating mathematically grounded hypotheses with formal $\\LaTeX$ formulations, lag-1 lookahead safeguards, and code diffs.")
+        st.info(f"🔵 **Deterministic Econometric Mode (`{sel_model}`)**: No `GEMINI_API_KEY` provided. Generating mathematically grounded hypotheses with formal $\\LaTeX$ formulations, lag-1 lookahead safeguards, and code diffs.")
     else:
         st.info(f"🔵 **Autonomous {f_author.title()} Mode**: Grounded synthesis based on {f_author.title()}'s architectural focus.")
 
     with st.expander("🔍 How Hypotheses Are Generated & How Models Are Triggered"):
-        st.markdown("""
+        st.markdown(f"""
 ### Two-Phase Autonomous Trigger Architecture
 
 #### Phase 1: Grounded Hypothesis Generation (Ideation Engine)
@@ -288,7 +296,7 @@ with tab_generate:
    - Codebase topology (which files can be modified).
    - Negative knowledge base (previously rejected proposals to prevent duplicating failed attempts).
 3. **Model Invocation**:
-   - **With `GEMINI_API_KEY`**: Calls Google Gemini (`gemini-1.5-flash` / `gemini-1.5-pro`) via `google-generativeai` with strict YAML frontmatter schema.
+   - **With `GEMINI_API_KEY`**: Calls Google Gemini (`{sel_model}`) via `google-generativeai` with strict YAML frontmatter schema.
    - **Without API Key (Offline)**: Deterministic econometric engine synthesizes structured 5-section hypotheses with formal $\\LaTeX$ equations and `.shift(1)` lookahead safeguards.
 
 #### Phase 2: In-Process Implementation & Backtesting (`AgentDispatcher`)
@@ -310,7 +318,7 @@ with tab_generate:
         st.code(prompt_preview, language="markdown")
 
     if st.button("🚀 Generate Proposal RFC with Grounded Ideation Engine", type="primary", use_container_width=True):
-        with st.spinner(f"Querying {f_author.title()} with grounded baseline context and assembling RFC..."):
+        with st.spinner(f"Querying {f_author.title()} ({sel_model}) with grounded baseline context and assembling RFC..."):
             author_m = ModelName(f_author)
             strat_m = StrategyTarget(f_strategy)
             next_id = pm.get_next_proposal_id()
@@ -325,6 +333,7 @@ with tab_generate:
                 rejected_dir=pm.rejected_dir,
                 next_id=next_id,
                 api_key=api_key,
+                model_name=sel_model,
             )
             ProposalStateMachine.submit_to_human(new_prop)
             pm.save_proposal(new_prop)
