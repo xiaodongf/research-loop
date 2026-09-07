@@ -1,0 +1,88 @@
+"""Gemini / Antigravity workspace runner executing inside workspace/trading."""
+from __future__ import annotations
+import os, subprocess, select, time
+from pathlib import Path
+from typing import Callable, Optional, List
+
+from src.agents.base import AgentRunner
+from src.core.isolation_guard import WorkspaceIsolationGuard
+from src.core.git_manager import GitManager
+
+
+class GeminiRunner(AgentRunner):
+    """Executes Gemini / Antigravity agent tasks inside workspace/trading."""
+
+    def __init__(
+        self,
+        workspace_path: Path,
+        command: Optional[str] = None,
+        isolation_guard: Optional[WorkspaceIsolationGuard] = None,
+        git_manager: Optional[GitManager] = None,
+        timeout_seconds: int = 600,
+    ):
+        super().__init__(
+            name="gemini",
+            workspace_path=workspace_path,
+            isolation_guard=isolation_guard,
+            git_manager=git_manager,
+        )
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+
+    def _run_process(
+        self,
+        prompt: str,
+        on_output: Optional[Callable[[str], None]] = None,
+    ) -> tuple[int, str, Optional[str]]:
+        if self.command:
+            cmd = ["bash", "-c", self.command]
+        else:
+            # Default runner invocation: executes python runner or agent dispatch
+            cmd = ["python3", "-c", f"print('Executing Gemini task in {self.workspace_path}'); print({repr(prompt)})"]
+
+        lines = []
+        start_time = time.time()
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(self.workspace_path),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=os.environ.copy(),
+        )
+
+        try:
+            while True:
+                if time.time() - start_time > self.timeout_seconds:
+                    proc.kill()
+                    return -1, "\n".join(lines), f"Gemini execution timed out after {self.timeout_seconds}s"
+
+                rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                if rlist:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    line_clean = line.rstrip("\n")
+                    lines.append(line_clean)
+                    if on_output:
+                        on_output(line_clean)
+                else:
+                    if proc.poll() is not None:
+                        for remaining in proc.stdout.readlines():
+                            line_clean = remaining.rstrip("\n")
+                            lines.append(line_clean)
+                            if on_output:
+                                on_output(line_clean)
+                        break
+
+            proc.wait()
+            exit_code = proc.returncode
+            full_output = "\n".join(lines)
+            err = None if exit_code == 0 else f"Process exited with non-zero code {exit_code}"
+            return exit_code, full_output, err
+
+        except Exception as e:
+            proc.kill()
+            return -1, "\n".join(lines), str(e)

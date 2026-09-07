@@ -1,0 +1,38 @@
+workspaces:
+  gemini:
+    name: "Gemini (Antigravity)"
+    path: "/home/xiaodong/workspace/trading"
+    branch: "dev"
+    role: "Core strategy innovation & feature engineering"
+  claude:
+    name: "Claude Code"
+    path: "/home/xiaodong/workspace/trading-claude"
+    branch: "claude"
+    binary: "/home/xiaodong/.config/Claude/claude-code/2.1.255/claude"
+    role: "Mathematical audits, lookahead bisecting & deep refactoring"
+  chatgpt:
+    name: "ChatGPT"
+    path: "/home/xiaodong/workspace/trading-gpt"
+    branch: "chatgpt"
+    role: "Hypothesis synthesis, cross-model review & regime analysis"
+
+golden_truth:
+  branch: "main"
+
+evaluation:
+  default_mode: "quick"
+  python_bin: "/home/xiaodong/workspace/trading/venv/bin/python"
+  results_dir: "/home/xiaodong/workspace/trading/evaluation/outputs/results"
+  timeout_seconds: 600
+
+safety:
+  enforce_workspace_isolation: true
+  immutable_files:
+    - "evaluation/folds.py"
+    - "evaluation/runner.py"
+    - "evaluation/metrics.py"
+
+proposals:
+  active_dir: "proposals/active"
+  promoted_dir: "proposals/promoted"
+  rejected_dir: "proposals/rejected"
