@@ -10,11 +10,14 @@ from src.core.git_manager import GitManager
 
 
 class GPTRunner(AgentRunner):
-    """Executes ChatGPT agent tasks inside workspace/trading-gpt."""
+    """Executes ChatGPT / OpenAI Codex agent tasks inside workspace/trading-gpt."""
+
+    DEFAULT_BINARY = "/usr/lib/chatgpt/resources/codex"
 
     def __init__(
         self,
         workspace_path: Path,
+        binary_path: Optional[str] = None,
         command: Optional[str] = None,
         isolation_guard: Optional[WorkspaceIsolationGuard] = None,
         git_manager: Optional[GitManager] = None,
@@ -26,6 +29,7 @@ class GPTRunner(AgentRunner):
             isolation_guard=isolation_guard,
             git_manager=git_manager,
         )
+        self.binary_path = binary_path or self.DEFAULT_BINARY
         self.command = command
         self.timeout_seconds = timeout_seconds
 
@@ -36,11 +40,20 @@ class GPTRunner(AgentRunner):
     ) -> tuple[int, str, Optional[str]]:
         if self.command:
             cmd = ["bash", "-c", self.command]
+        elif self.binary_path and self.binary_path.startswith("mock:"):
+            cmd = ["bash", "-c", self.binary_path.replace("mock:", "")]
+        elif self.binary_path and Path(self.binary_path).exists():
+            cmd = [self.binary_path, "exec", "--dangerously-bypass-approvals-and-sandbox", prompt]
         else:
             cmd = ["python3", "-c", f"print('Executing ChatGPT task in {self.workspace_path}'); print({repr(prompt)})"]
 
         lines = []
         start_time = time.time()
+
+        env = os.environ.copy()
+        chatgpt_res = "/usr/lib/chatgpt/resources"
+        if Path(chatgpt_res).exists() and chatgpt_res not in env.get("PATH", ""):
+            env["PATH"] = f"{chatgpt_res}:{env.get('PATH', '')}"
 
         proc = subprocess.Popen(
             cmd,
@@ -49,7 +62,7 @@ class GPTRunner(AgentRunner):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            env=os.environ.copy(),
+            env=env,
         )
 
         try:

@@ -12,9 +12,10 @@ workspaces:
     binary: "/home/xiaodong/.config/Claude/claude-code/2.1.255/claude"
     role: "Mathematical audits, lookahead bisecting & deep refactoring"
   chatgpt:
-    name: "ChatGPT"
+    name: "ChatGPT (Codex)"
     path: "/home/xiaodong/workspace/trading-gpt"
     branch: "chatgpt"
+    binary: "/usr/lib/chatgpt/resources/codex"
     role: "Hypothesis synthesis, cross-model review & regime analysis"
 
 golden_truth:

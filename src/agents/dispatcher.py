@@ -67,6 +67,7 @@ class AgentDispatcher:
             gpt_conf = ws_conf["chatgpt"]
             self.runners["chatgpt"] = GPTRunner(
                 workspace_path=Path(gpt_conf["path"]),
+                binary_path=gpt_conf.get("binary"),
                 command=gpt_conf.get("command"),
                 isolation_guard=self.isolation_guard,
                 git_manager=self.git_manager,
