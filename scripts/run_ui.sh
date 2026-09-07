@@ -4,6 +4,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-
+PORT="${1:-8503}"
 cd "$ROOT_DIR"
-exec ./venv/bin/streamlit run src/ui/dashboard.py --server.port 8501 --server.headless true
+exec ./venv/bin/python -m streamlit run src/ui/dashboard.py --server.port "$PORT" --server.headless true
