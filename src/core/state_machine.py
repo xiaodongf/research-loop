@@ -19,6 +19,9 @@ class StateMachine:
                 f"Cannot transition proposal {proposal.id} out of terminal state {current}."
             )
 
+        if current == target_status:
+            return proposal
+
         # Valid transition rules
         valid_transitions = {
             ProposalStatus.DRAFT: [ProposalStatus.HUMAN_REVIEW],
@@ -44,6 +47,8 @@ class StateMachine:
 
     @classmethod
     def submit_to_human(cls, proposal: Proposal) -> Proposal:
+        if proposal.metadata.status == ProposalStatus.HUMAN_REVIEW:
+            return proposal
         return cls.transition(proposal, ProposalStatus.HUMAN_REVIEW)
 
     @classmethod

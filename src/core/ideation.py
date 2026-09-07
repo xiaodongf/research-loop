@@ -350,6 +350,53 @@ class IdeationEngine:
                 "    return pt_mult * atr, -sl_mult * atr\n"
                 "```"
             )
+        elif "volume" in theme_lower or "quantile" in theme_lower or "expansion" in theme_lower:
+            title = f"Volume-Weighted Cross-Sectional Alpha Expansion on {strategy.value}"
+            hypothesis = (
+                f"Empirical evaluation of verified baseline ({base_csv}, Top-1 Precision: {base_prec1:.2f}%, Total PnL: {base_pnl:+.2f}%) "
+                f"demonstrates that unweighted price rankings suffer from high churn during low-liquidity market regimes.\n\n"
+                f"We introduce volume-synchronized feature expansion combining 10-day VWAP deviation and normalized On-Balance Volume (OBV) acceleration:\n"
+                f"$$\\text{{VWAP\\_Ratio}}_t = \\frac{{C_t - \\text{{VWAP}}_{{10, t-1}}}}{{\\text{{VWAP}}_{{10, t-1}}}}, \\quad "
+                f"\\text{{OBV\\_Acc}}_t = \\frac{{\\text{{OBV}}_{{5, t-1}} - \\text{{OBV}}_{{20, t-1}}}}{{\\sigma_{{\\text{{OBV}}, 20, t-1}} + \\epsilon}}$$\n\n"
+                f"Lookahead Safeguard: All volume aggregations and price cross-sections are strictly lagged by 1 bar (`.shift(1)`).\n\n"
+                f"Target Improvement:\n"
+                f"- Precision Target: >{base_prec1 + 2.0:.2f}% (+2.0% delta over baseline)\n"
+                f"- Total PnL Target: >{base_pnl + 5.0:.2f}% (+5.0% delta over baseline)\n"
+                f"- Worst Fold Threshold: >{base_worst + 2.0:.2f}%"
+            )
+            proposed_files = ["data_access/features.py", "ml/models/xgboost_model.py" if strategy == StrategyTarget.QUANTILE else "evaluation/configs.py"]
+            impl_spec = (
+                "```python\n"
+                "# In data_access/features.py:\n"
+                "def calculate_volume_alpha_signals(df: pd.DataFrame) -> pd.DataFrame:\n"
+                "    typical_price = (df['high'] + df['low'] + df['close']) / 3.0\n"
+                "    vwap_10 = (typical_price * df['volume']).rolling(10).sum() / (df['volume'].rolling(10).sum() + 1e-8)\n"
+                "    vwap_ratio = ((df['close'] - vwap_10) / vwap_10).shift(1)\n"
+                "    direction = np.sign(df['close'].diff().fillna(0))\n"
+                "    obv = (direction * df['volume']).cumsum()\n"
+                "    obv_acc = ((obv.rolling(5).mean() - obv.rolling(20).mean()) / (obv.rolling(20).std() + 1e-8)).shift(1)\n"
+                "    return pd.DataFrame({'vwap_ratio': vwap_ratio, 'obv_acc': obv_acc}, index=df.index)\n"
+                "```"
+            )
+        elif "overfit" in theme_lower or "lookahead" in theme_lower or "audit" in theme_lower:
+            title = f"Purged Walk-Forward Lookahead & Combinatorial Purge Audit on {strategy.value}"
+            hypothesis = (
+                f"Auditing recent baseline ({base_csv}, Win Rate: {base_win:.2f}%) for subtle label contamination and feature leakages.\n\n"
+                f"We implement Combinatorial Purged Cross-Validation (CPCV) with embargo spans:\n"
+                f"$$t_{{\\text{{embargo}}}} = t_{{\\text{{exit}}}} + 5\\,\\text{{bars}}$$\n\n"
+                f"Ensuring training samples overlapping with out-of-fold evaluation horizons are strictly purged to prevent optimistic bias.\n"
+                f"Target Improvement: Eliminate fold performance discrepancy (reduce max-to-min fold spread by >25%)."
+            )
+            proposed_files = ["evaluation/data.py", "evaluation/configs.py"]
+            impl_spec = (
+                "```python\n"
+                "# In evaluation/data.py:\n"
+                "def apply_embargo_purge(train_df: pd.DataFrame, test_df: pd.DataFrame, embargo_bars: int = 5) -> pd.DataFrame:\n"
+                "    test_end = test_df.index.max()\n"
+                "    embargo_cutoff = test_end + pd.Timedelta(days=embargo_bars)\n"
+                "    return train_df[(train_df.index < test_df.index.min()) | (train_df.index > embargo_cutoff)]\n"
+                "```"
+            )
         else:
             title = f"Cross-Sectional Residual Momentum on {strategy.value}"
             hypothesis = (
@@ -377,7 +424,7 @@ class IdeationEngine:
             title=title,
             author_model=author_model,
             assigned_branch=assigned_branch,
-            status=ProposalStatus.HUMAN_REVIEW,
+            status=ProposalStatus.DRAFT,
             target_strategy=strategy,
             acceptance_criteria=AcceptanceCriteria(
                 eval_mode="quick",

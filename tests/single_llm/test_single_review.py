@@ -29,6 +29,10 @@ def test_single_draft_to_human_review():
     updated = StateMachine.submit_to_human(proposal)
     assert updated.status == ProposalStatus.HUMAN_REVIEW
 
+    # Idempotent: re-submitting to human review should safely succeed
+    again = StateMachine.submit_to_human(updated)
+    assert again.status == ProposalStatus.HUMAN_REVIEW
+
 
 def test_single_human_approval():
     proposal = create_sample_proposal(status=ProposalStatus.HUMAN_REVIEW)
