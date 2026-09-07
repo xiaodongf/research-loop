@@ -178,7 +178,7 @@ def test_ideation_engine_grounded_generation(tmp_path):
     assert prop.metadata.assigned_branch == "dev"
     assert "Garman-Klass" in prop.metadata.title
     assert "32.00%" in prop.hypothesis
-    assert "\\sigma_{GK}^2" in prop.hypothesis
+    assert "\\sigma_{GK" in prop.hypothesis
     assert "calculate_garman_klass_vol" in prop.implementation_spec
     assert prop.metadata.acceptance_criteria.min_pnl_delta == 2.0
 

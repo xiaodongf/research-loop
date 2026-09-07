@@ -78,6 +78,21 @@ if st.sidebar.button("⚡ Rebase All Branches from Main", use_container_width=Tr
     else:
         st.sidebar.warning("Workspaces not configured or missing.")
 
+st.sidebar.divider()
+st.sidebar.header("🔑 LLM Configuration")
+env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+input_key = st.sidebar.text_input(
+    "Gemini API Key:",
+    value=st.session_state.get("gemini_api_key", env_key),
+    type="password",
+    help="Used for live LLM ideation via Google Gemini API. If omitted, uses deterministic walk-forward econometric grounding."
+)
+if input_key:
+    st.session_state["gemini_api_key"] = input_key
+    st.sidebar.caption("🟢 **Gemini Live API**: Active")
+else:
+    st.sidebar.caption("🔵 **Engine Mode**: Offline Econometric Grounding")
+
 # Navigation Tabs
 tab_board, tab_cockpit, tab_generate, tab_scorecard, tab_terminal = st.tabs([
     "📋 Proposal Kanban",
@@ -252,6 +267,47 @@ with tab_generate:
             g3.metric("Win Rate", f"{cur_metrics.get('win_rate', 0.0):.2f}%")
             g4.metric("Worst Fold PnL", f"{cur_metrics.get('worst_fold', 0.0):+.2f}%")
             st.caption(f"Source Benchmark: `{cur_metrics.get('csv_file')}` | Folds: {cur_metrics.get('num_folds', 0)}")
+
+    active_key = st.session_state.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if f_author == ModelName.GEMINI.value and active_key:
+        st.success("🟢 **Live Gemini API Connected**: Generation will invoke Google Gemini (`gemini-1.5-flash` / `gemini-1.5-pro`) grounded on empirical backtest metrics.")
+    elif f_author == ModelName.GEMINI.value:
+        st.info("🔵 **Deterministic Econometric Mode**: No `GEMINI_API_KEY` provided. Generating mathematically grounded hypotheses with formal $\\LaTeX$ formulations, lag-1 lookahead safeguards, and code diffs.")
+    else:
+        st.info(f"🔵 **Autonomous {f_author.title()} Mode**: Grounded synthesis based on {f_author.title()}'s architectural focus.")
+
+    with st.expander("🔍 How Hypotheses Are Generated & How Models Are Triggered"):
+        st.markdown("""
+### Two-Phase Autonomous Trigger Architecture
+
+#### Phase 1: Grounded Hypothesis Generation (Ideation Engine)
+1. **Empirical Context Ingestion**: The harness reads the latest walk-forward CSV in `evaluation/outputs/results/` (e.g. `Top-1 Precision`, `Total PnL`, `Win Rate`, `Worst Fold Drawdown`).
+2. **Context Packet Assembly**: Combines:
+   - Target strategy entry logic (`standalone_tb`, `quantile`, `stacked_tb`).
+   - Verified baseline performance numbers.
+   - Codebase topology (which files can be modified).
+   - Negative knowledge base (previously rejected proposals to prevent duplicating failed attempts).
+3. **Model Invocation**:
+   - **With `GEMINI_API_KEY`**: Calls Google Gemini (`gemini-1.5-flash` / `gemini-1.5-pro`) via `google-generativeai` with strict YAML frontmatter schema.
+   - **Without API Key (Offline)**: Deterministic econometric engine synthesizes structured 5-section hypotheses with formal $\\LaTeX$ equations and `.shift(1)` lookahead safeguards.
+
+#### Phase 2: In-Process Implementation & Backtesting (`AgentDispatcher`)
+1. **Approval**: When you click `[Approve & Implement]` in the Review Cockpit, the proposal enters `APPROVED`.
+2. **Execution**: The `AgentDispatcher` dispatches `GeminiRunner` directly in `/home/xiaodong/workspace/trading` on the `dev` branch.
+3. **Commit & Integrity Guard**: Monitors git commits, verifies that `evaluation/folds.py` was NOT modified (read-only invariant), and isolates other workspaces.
+4. **Auto-Evaluation**: Runs `python -m evaluation.cli --strategy <strat> --mode quick --ab <variant>` and parses the walk-forward results into the A/B Scorecard.
+        """)
+
+        context_preview = ContextBuilder.build(strategy=StrategyTarget(f_strategy), results_dir=res_dir, rejected_dir=pm.rejected_dir)
+        prompt_preview = PromptBuilder.create_ideation_prompt(
+            author_model=ModelName(f_author),
+            strategy=StrategyTarget(f_strategy),
+            theme=f_theme,
+            context=context_preview,
+            next_id=pm.get_next_proposal_id(),
+        )
+        st.caption("Inspect live context prompt passed to LLM:")
+        st.code(prompt_preview, language="markdown")
 
     if st.button("🚀 Generate Proposal RFC with Grounded Ideation Engine", type="primary", use_container_width=True):
         with st.spinner(f"Querying {f_author.title()} with grounded baseline context and assembling RFC..."):
