@@ -41,9 +41,10 @@ def test_dashboard_fleet_cards_explicit_reviewer_validation_and_staging_route(
     svc = BusService(root_dir=five_repo_topology["hub_root"], config=five_repo_topology["config"])
     assert svc.store.list_threads() == []
 
-    # 3. Check `claude` and `chatgpt` explicitly and dispatch -> creates THR-0001 cleanly!
+    # 3. Check `claude` and `chatgpt` explicitly and dispatch (in Session Inbox Only mode) -> creates THR-0001 cleanly!
     at.checkbox(key="target_chk_claude").check()
     at.checkbox(key="target_chk_chatgpt").check()
+    at.radio(key="dispatch_mode").set_value("Session Inbox Only")
     at.button(key="dispatch_submit_btn").click().run()
     assert not at.exception
     assert any("THR-0001" in s.value for s in at.success)
@@ -142,9 +143,8 @@ def test_dashboard_headless_audit_dispatch_auto_resolves_main_head_and_launches_
     at.text_area(key="dispatch_body").set_value(
         "do a comprehensive audit of the latest change on main branch on quantile strategy"
     )
-    # Leave dispatch_head_sha blank on purpose!
+    # Leave dispatch_head_sha blank AND leave dispatch_mode at its default ("Headless Read-Only Audit Now")!
     at.checkbox(key="target_chk_chatgpt").check()
-    at.radio(key="dispatch_mode").set_value("Headless Read-Only Audit Now")
     at.button(key="dispatch_submit_btn").click().run()
     assert not at.exception
 

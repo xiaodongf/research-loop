@@ -431,6 +431,7 @@ with tab_threads:
                 if chk_cols[i].checkbox(cand, value=False, key=f"target_chk_{cand}"):
                     selected_targets.append(cand)
 
+            default_mode_idx = 2 if Intent(d_intent) in READ_ONLY_AUTO_INTENTS else 0
             d_mode = st.radio(
                 "Delivery & Execution Mode:",
                 [
@@ -438,7 +439,7 @@ with tab_threads:
                     "Queue Auto-Audit",
                     "Headless Read-Only Audit Now",
                 ],
-                index=0,
+                index=default_mode_idx,
                 key="dispatch_mode",
             )
 
@@ -493,6 +494,7 @@ with tab_threads:
                         env = res["envelope"]
                         msg_id = env["msg_id"]
                         tid = env["thread_id"]
+                        to_names = [a.value if hasattr(a, "value") else str(a) for a in env["to_agents"]]
                         st.session_state["focus_thread_id"] = tid
 
                         if d_mode == "Headless Read-Only Audit Now":
@@ -506,12 +508,14 @@ with tab_threads:
                                 db_path=override_db,
                             )
                             notice_txt = (
-                                f"Dispatched `{msg_id}` on thread `{tid}` -> `{env['to_agents']}`! "
+                                f"Dispatched `{msg_id}` on thread `{tid}` -> `{to_names}`! "
                                 f"Headless read-only audit launched in background (PID `{job_meta['pid']}`) — "
                                 f"watch live progress on the right."
                             )
                         else:
-                            notice_txt = f"Dispatched `{msg_id}` on thread `{tid}` -> `{env['to_agents']}`!"
+                            notice_txt = (
+                                f"Dispatched `{msg_id}` on thread `{tid}` -> `{to_names}` (mode: `{d_mode}`)!"
+                            )
 
                         st.session_state["last_dispatch_notice"] = {
                             "text": notice_txt,
@@ -540,12 +544,13 @@ with tab_threads:
                 for t in threads
             ]
             thr_map = dict(zip(thr_labels, [t.thread_id for t in threads]))
-            focus_tid = st.session_state.get("focus_thread_id")
+            focus_tid = st.session_state.pop("focus_thread_id", None)
             default_idx = 0
             if focus_tid:
                 for idx_t, t_obj in enumerate(threads):
                     if t_obj.thread_id == focus_tid:
                         default_idx = idx_t
+                        st.session_state["thread_select"] = thr_labels[idx_t]
                         break
 
             sel_thr_lbl = st.selectbox("Select Thread:", thr_labels, index=default_idx, key="thread_select")
