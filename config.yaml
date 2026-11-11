@@ -1,30 +1,55 @@
 workspaces:
-  gemini:
-    name: "Gemini (Antigravity)"
+  main:
+    name: "Main (Production Custodian)"
+    path: "/home/xiaodong/workspace/trading-exp"
+    branch: "main"
+    role: "Production custodian, live crons, SHA256 model syncs, hotfixes & release gatekeeper"
+  staging:
+    name: "Staging (Pre-Main Integration)"
+    path: "/home/xiaodong/workspace/trading-staging"
+    branch: "staging"
+    role: "Full 28/38-fold A/A burn-in & config parity verification before main merge"
+  dev:
+    name: "Dev - Gemini (Antigravity)"
     path: "/home/xiaodong/workspace/trading"
     branch: "dev"
     model: "gemini-3.8-flash"
-    role: "Core strategy innovation & feature engineering"
+    role: "Core strategy innovation, feature engineering & A/B ablations"
   claude:
     name: "Claude Code"
     path: "/home/xiaodong/workspace/trading-claude"
     branch: "claude"
-    binary: "/home/xiaodong/.config/Claude/claude-code/2.1.255/claude"
-    role: "Mathematical audits, lookahead bisecting & deep refactoring"
+    binary: "auto"
+    role: "Mathematical/causality audits, lookahead bisecting, parity verification & deep SOTA research"
   chatgpt:
     name: "ChatGPT (Codex)"
     path: "/home/xiaodong/workspace/trading-gpt"
     branch: "chatgpt"
     binary: "/usr/lib/chatgpt/resources/codex"
-    role: "Hypothesis synthesis, cross-model review & regime analysis"
+    role: "Econometric & regime challenge, supervisor stabilization & cross-model synthesis"
 
 golden_truth:
+  workspace: "main"
   branch: "main"
+
+bus:
+  db_path: "state/hub.db"
+  peer_refs_dir: "state/peer_refs.git"
+  threads_dir: "threads"
+  knowledge_dir: "knowledge"
+  worktree_root: "/tmp/rl-worktrees"
+  delivery_mode: "hybrid"          # hybrid: inbox + headless read-only auto-audits
+  guardrail_mode: "advisory"       # advisory: warn on drift/overlap, never hard-block
+  require_explicit_reviewers: true # to_agents always explicit on review/audit requests
+  max_auto_rounds: 3
+  audit_timeout_seconds: 300
 
 evaluation:
   default_mode: "quick"
   python_bin: "/home/xiaodong/workspace/trading/venv/bin/python"
   results_dir: "/home/xiaodong/workspace/trading/evaluation/outputs/results"
+  capacity_script: "/home/xiaodong/workspace/trading-exp/scripts/check_host_capacity.py"
+  default_workers: 4
   timeout_seconds: 600
 
 safety:

@@ -54,14 +54,30 @@ class AgentDispatcher:
                 git_manager=self.git_manager,
             )
 
-        if "gemini" in ws_conf:
-            g_conf = ws_conf["gemini"]
-            self.runners["gemini"] = GeminiRunner(
+        if "gemini" in ws_conf or "dev" in ws_conf:
+            g_key = "dev" if "dev" in ws_conf else "gemini"
+            g_conf = ws_conf[g_key]
+            runner = GeminiRunner(
                 workspace_path=Path(g_conf["path"]),
                 command=g_conf.get("command"),
                 isolation_guard=self.isolation_guard,
                 git_manager=self.git_manager,
             )
+            runner.name = g_key
+            self.runners["gemini"] = runner
+            self.runners["dev"] = runner
+
+        for extra_key in ("main", "staging"):
+            if extra_key in ws_conf:
+                e_conf = ws_conf[extra_key]
+                runner = GeminiRunner(
+                    workspace_path=Path(e_conf["path"]),
+                    command=e_conf.get("command"),
+                    isolation_guard=self.isolation_guard,
+                    git_manager=self.git_manager,
+                )
+                runner.name = extra_key
+                self.runners[extra_key] = runner
 
         if "chatgpt" in ws_conf:
             gpt_conf = ws_conf["chatgpt"]
@@ -80,7 +96,9 @@ class AgentDispatcher:
 
         # Map branch name to workspace key
         branch_map = {
-            "dev": "gemini",
+            "main": "main",
+            "staging": "staging",
+            "dev": "dev" if "dev" in self.runners else "gemini",
             "claude": "claude",
             "chatgpt": "chatgpt",
         }
@@ -93,13 +111,24 @@ class AgentDispatcher:
     def build_implementation_prompt(self, proposal: Proposal) -> str:
         """Constructs an executable prompt for the agent to implement the proposal."""
         mod_files = "\n".join(f"- {f}" for f in proposal.proposed_files) if proposal.proposed_files else "See proposal body."
+        spec_block = f"\nApproved Implementation Spec:\n{proposal.implementation_spec}\n" if proposal.implementation_spec else ""
+        review_block = ""
+        if proposal.metadata.reviewers:
+            notes = "\n".join(
+                f"- [{r.model.value} / {r.verdict.value}]: {r.comment}"
+                for r in proposal.metadata.reviewers
+            )
+            review_block = f"\nMandatory Peer Review Notes to Address:\n{notes}\n"
+
         prompt = (
             f"Please implement algorithmic proposal {proposal.metadata.id}: {proposal.metadata.title}\n\n"
             f"Target Strategy: {proposal.metadata.target_strategy.value}\n"
-            f"Hypothesis:\n{proposal.hypothesis}\n\n"
+            f"Hypothesis:\n{proposal.hypothesis}\n"
+            f"{spec_block}"
+            f"{review_block}\n"
             f"Target Files:\n{mod_files}\n\n"
             f"Instructions:\n"
-            f"1. Implement the requested algorithmic modifications.\n"
+            f"1. Implement the requested algorithmic modifications and honor all peer review notes.\n"
             f"2. DO NOT modify any evaluation core files (evaluation/folds.py, evaluation/runner.py, evaluation/metrics.py).\n"
             f"3. Run quick smoke tests to ensure code executes without syntax or import errors.\n"
             f"4. Commit your changes with commit message 'feat({proposal.metadata.target_strategy.value}): {proposal.metadata.id} - {proposal.metadata.title}'."
@@ -150,6 +179,10 @@ class AgentDispatcher:
                 on_output(f"[!] Agent finished without producing a new git commit.")
             return result, None
 
+        proposal.metadata.commit_hash = result.commit_sha
+        if self.proposal_manager:
+            self.proposal_manager.save_proposal(proposal)
+
         if on_output:
             on_output(f"[+] Agent successfully committed changes: {result.commit_sha[:8]}")
 
@@ -162,7 +195,7 @@ class AgentDispatcher:
 
             eval_mode = proposal.metadata.acceptance_criteria.eval_mode
             target_strat = proposal.metadata.target_strategy.value
-            variant_name = proposal.metadata.id.lower()
+            variant_name = proposal.metadata.variant_tag or proposal.metadata.id.lower()
 
             if on_output:
                 on_output(f"[*] Triggering automated evaluation: --strategy {target_strat} --mode {eval_mode} --ab {variant_name}...")

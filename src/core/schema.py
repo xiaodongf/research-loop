@@ -19,6 +19,9 @@ class ProposalStatus(str, Enum):
 
 
 class ModelName(str, Enum):
+    MAIN = "main"
+    STAGING = "staging"
+    DEV = "dev"
     GEMINI = "gemini"
     CLAUDE = "claude"
     CHATGPT = "chatgpt"
@@ -114,12 +117,14 @@ class FoldMetricRow(BaseModel):
     base_max_dd: float
     base_sharpe: float
     base_prec1: float
+    base_avg_exp: float = 0.0
     var_n: int
     var_win: float
     var_total_return: float
     var_max_dd: float
     var_sharpe: float
     var_prec1: float
+    var_avg_exp: float = 0.0
     delta_total_return: float
     delta_win: float
     delta_prec1: float
@@ -132,21 +137,47 @@ class ScorecardSummary(BaseModel):
     timestamp: str
     git_commit: str
     num_folds: int
+    # 1. Total Cumulative Return (sum of fold return pp)
     base_pnl_total: float
     var_pnl_total: float
     delta_pnl_total: float
     base_pnl_ex_largest: float
     var_pnl_ex_largest: float
     delta_pnl_ex_largest: float
+    # 2. Pooled Trade Win Rate (%)
     base_win_rate: float
     var_win_rate: float
     delta_win_rate: float
+    # 3. Paired Fold Win Rate (%)
+    fold_wins: int
+    fold_win_rate: float = 0.0
+    # 4. Worst-Fold Return
+    worst_fold_base: float
+    worst_fold_var: float
+    delta_worst_fold: float = 0.0
+    # 5. Worst-Fold Max Drawdown
+    worst_dd_base: float = 0.0
+    worst_dd_var: float = 0.0
+    delta_worst_dd: float = 0.0
+    # 6. Mean Max Drawdown across folds
+    mean_dd_base: float = 0.0
+    mean_dd_var: float = 0.0
+    delta_mean_dd: float = 0.0
+    # 7. Mean Sharpe Ratio
+    mean_sharpe_base: float = 0.0
+    mean_sharpe_var: float = 0.0
+    delta_mean_sharpe: float = 0.0
+    # 8. Mean Average Exposure (%)
+    mean_exp_base: float = 0.0
+    mean_exp_var: float = 0.0
+    delta_mean_exp: float = 0.0
+    # 9. Precision@10% (Top-1 signal precision)
     base_prec1_mean: float
     var_prec1_mean: float
     delta_prec1_mean: float
-    worst_fold_base: float
-    worst_fold_var: float
-    fold_wins: int
+    # 10. Trade counts & Fold counts
+    total_trades_base: int = 0
+    total_trades_var: int = 0
     regime_deltas: Dict[str, float] = Field(default_factory=dict)
     rows: List[FoldMetricRow] = Field(default_factory=list)
 

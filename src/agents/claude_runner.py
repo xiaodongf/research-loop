@@ -12,7 +12,43 @@ from src.core.git_manager import GitManager
 class ClaudeCodeRunner(AgentRunner):
     """Executes Claude Code CLI headlessly inside workspace/trading-claude."""
 
-    DEFAULT_BINARY = "/home/xiaodong/.config/Claude/claude-code/2.1.255/claude"
+    DEFAULT_BINARY = "auto"
+
+    @staticmethod
+    def resolve_claude_binary(binary_path: Optional[str] = None) -> str:
+        if binary_path and binary_path.startswith("mock:"):
+            return binary_path
+        if binary_path and binary_path != "auto" and Path(binary_path).exists():
+            return binary_path
+
+        # Search versioned ~/.config/Claude/claude-code/*/claude sorted descending
+        home = Path.home()
+        versioned_root = home / ".config" / "Claude" / "claude-code"
+        try:
+            if versioned_root.exists():
+                candidates = sorted(versioned_root.glob("*/claude"), reverse=True)
+                for cand in candidates:
+                    if cand.is_file():
+                        return str(cand)
+        except OSError:
+            pass
+
+        for fixed in (
+            home / ".local" / "bin" / "claude",
+            Path("/usr/local/bin/claude"),
+            Path("/usr/bin/claude"),
+        ):
+            try:
+                if fixed.exists():
+                    return str(fixed)
+            except OSError:
+                continue
+
+        import shutil
+        which_claude = shutil.which("claude")
+        if which_claude:
+            return which_claude
+        return binary_path if (binary_path and binary_path != "auto") else "claude"
 
     def __init__(
         self,
@@ -36,17 +72,7 @@ class ClaudeCodeRunner(AgentRunner):
         prompt: str,
         on_output: Optional[Callable[[str], None]] = None,
     ) -> tuple[int, str, Optional[str]]:
-        # Check if binary exists or if custom command passed
-        if not Path(self.binary_path).exists() and not self.binary_path.startswith("mock:"):
-            # Check if claude is in PATH
-            import shutil
-            which_claude = shutil.which("claude")
-            if which_claude:
-                bin_cmd = which_claude
-            else:
-                bin_cmd = self.binary_path
-        else:
-            bin_cmd = self.binary_path
+        bin_cmd = self.resolve_claude_binary(self.binary_path)
 
         if bin_cmd.startswith("mock:"):
             cmd = ["bash", "-c", bin_cmd.replace("mock:", "")]
