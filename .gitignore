@@ -5,4 +5,6 @@ __pycache__/
 .locks/
 output/
 state/
+threads/
+knowledge/
 

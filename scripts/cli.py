@@ -395,16 +395,24 @@ def cmd_bus_thread(args: argparse.Namespace) -> None:
 
 
 def cmd_bus_audit_run(args: argparse.Namespace) -> None:
+    from src.bus.audit_worker import write_audit_job_meta
+    from src.bus.schema import utc_now_iso
+
     svc = get_bus_service(args)
+    runs_dir = svc.store.db_path.parent / "audit_runs"
+
+    def _emit_line(ln: str) -> None:
+        print(f"  [audit] {ln}", flush=True)
+
     if args.msg_id:
         records = svc.audit_worker.execute_audit_for_message(
             args.msg_id,
-            on_output=lambda ln: print(f"  [audit] {ln}"),
+            on_output=_emit_line,
         )
     else:
         records = svc.audit_worker.poll_and_execute_once(
             limit=args.limit,
-            on_output=lambda ln: print(f"  [audit] {ln}"),
+            on_output=_emit_line,
         )
     out = [
         {
@@ -417,15 +425,35 @@ def cmd_bus_audit_run(args: argparse.Namespace) -> None:
         }
         for r in records
     ]
+    if args.msg_id:
+        meta_file = runs_dir / f"{args.msg_id}.json"
+        existing_meta = {}
+        if meta_file.exists():
+            try:
+                existing_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except Exception:
+                existing_meta = {}
+        all_ok = bool(out) and all(item["success"] for item in out)
+        existing_meta.update(
+            {
+                "msg_id": args.msg_id,
+                "status": "COMPLETED" if all_ok else "FAILED",
+                "finished_at": utc_now_iso(),
+                "results": out,
+            }
+        )
+        write_audit_job_meta(runs_dir, args.msg_id, existing_meta)
+
     if args.json:
-        print(json.dumps(out, indent=2))
+        print(json.dumps(out, indent=2), flush=True)
     else:
         if not out:
-            print("No pending read-only auto-audit messages to execute.")
+            print("No pending read-only auto-audit messages to execute.", flush=True)
         for item in out:
             print(
                 f"[audit] reviewer={item['reviewer']} success={item['success']} "
-                f"verdict={item['verdict']} reply={item['reply_msg_id']} err={item['error']}"
+                f"verdict={item['verdict']} reply={item['reply_msg_id']} err={item['error']}",
+                flush=True,
             )
 
 

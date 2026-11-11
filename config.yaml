@@ -42,7 +42,7 @@ bus:
   guardrail_mode: "advisory"       # advisory: warn on drift/overlap, never hard-block
   require_explicit_reviewers: true # to_agents always explicit on review/audit requests
   max_auto_rounds: 3
-  audit_timeout_seconds: 300
+  audit_timeout_seconds: 600
 
 evaluation:
   default_mode: "quick"

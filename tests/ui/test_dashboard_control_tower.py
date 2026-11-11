@@ -102,3 +102,61 @@ def test_dashboard_ten_metric_scorecard_and_malformed_csv_rejection(
     at.text_input(key="scorecard_csv_path").set_value(str(bad_csv)).run()
     assert not at.exception
     assert any("Invalid A/B Scorecard CSV" in e.value for e in at.error)
+
+
+def test_dashboard_headless_audit_dispatch_auto_resolves_main_head_and_launches_nonblocking(
+    five_repo_topology: Dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression test for 'after I click dispatch, nothing happened':
+    Leaving `Commit SHA` blank while dispatching `Headless Read-Only Audit Now` must:
+    1) Auto-resolve `HEAD` on the selected Code Checkout (`main`),
+    2) Spawn `launch_background_audit` non-blockingly and immediately show a confirmation banner on rerun.
+    """
+    cfg_path: Path = five_repo_topology["config_path"]
+    monkeypatch.setenv("RL_CONFIG_PATH", str(cfg_path))
+    monkeypatch.delenv("RL_DB_PATH", raising=False)
+
+    launched_calls: list[Dict[str, Any]] = []
+
+    def _fake_launch_background_audit(**kwargs: Any) -> Dict[str, Any]:
+        launched_calls.append(kwargs)
+        return {
+            "msg_id": kwargs["msg_id"],
+            "thread_id": kwargs["thread_id"],
+            "reviewers": kwargs["reviewers"],
+            "pid": 424242,
+            "status": "RUNNING",
+        }
+
+    monkeypatch.setattr("src.bus.audit_worker.launch_background_audit", _fake_launch_background_audit)
+
+    at = AppTest.from_file(str(DASHBOARD_PATH), default_timeout=20)
+    at.run()
+    assert not at.exception
+
+    at.text_input(key="dispatch_subject").set_value(
+        "do an audit of the latest change on main branch on quantile strategy"
+    )
+    at.text_area(key="dispatch_body").set_value(
+        "do a comprehensive audit of the latest change on main branch on quantile strategy"
+    )
+    # Leave dispatch_head_sha blank on purpose!
+    at.checkbox(key="target_chk_chatgpt").check()
+    at.radio(key="dispatch_mode").set_value("Headless Read-Only Audit Now")
+    at.button(key="dispatch_submit_btn").click().run()
+    assert not at.exception
+
+    # Immediate confirmation banner rendered after non-blocking st.rerun()
+    assert any("launched in background" in s.value and "424242" in s.value for s in at.success)
+    assert len(launched_calls) == 1
+    assert launched_calls[0]["thread_id"] == "THR-0001"
+    assert launched_calls[0]["reviewers"] == ["chatgpt"]
+
+    svc = BusService(root_dir=five_repo_topology["hub_root"], config=five_repo_topology["config"])
+    msg = svc.store.get_message("MSG-000001")
+    assert msg is not None
+    assert msg.code_context is not None
+    assert msg.code_context.head_sha == five_repo_topology["main_head"]
+    assert msg.code_context.branch == "main"

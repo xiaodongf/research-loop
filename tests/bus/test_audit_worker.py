@@ -176,3 +176,81 @@ def test_supervised_command_timeout_kills_entire_process_group(
     while time.monotonic() < deadline and is_pid_alive(grandchild_pid):
         time.sleep(0.05)
     assert is_pid_alive(grandchild_pid) is False
+
+
+def test_supervised_command_does_not_hang_when_stdin_reads_until_eof(
+    five_repo_topology: Dict[str, Any], tmp_path: Path
+) -> None:
+    """
+    Regression test for UI/non-TTY hang: `codex exec` reads stdin until EOF whenever stdin is a pipe.
+    `run_supervised_command` must pass `stdin=subprocess.DEVNULL` so child processes see immediate EOF.
+    """
+    svc = BusService(root_dir=five_repo_topology["hub_root"], config=five_repo_topology["config"])
+    worker: AutoAuditWorker = svc.audit_worker
+
+    t0 = time.monotonic()
+    code, out, err = worker.run_supervised_command(
+        [sys.executable, "-c", "import sys; data = sys.stdin.read(); print(f'eof:{len(data)}')"],
+        cwd=tmp_path,
+        timeout_seconds=2.0,
+    )
+    elapsed = time.monotonic() - t0
+    assert code == 0
+    assert err is None
+    assert "eof:0" in out
+    assert elapsed < 1.5
+
+
+def test_commitless_audit_request_auto_mounts_target_main_worktree_and_error_posts_note(
+    five_repo_topology: Dict[str, Any],
+) -> None:
+    """
+    Regression test: when `head_sha` is omitted on an AUDIT_REQUEST targeting `main`,
+    AutoAuditWorker automatically mounts `main` HEAD in a disposable Git worktree instead
+    of an empty temp directory, and any provider failure posts an [AUDIT_ERROR] note onto the thread.
+    """
+    svc = BusService(root_dir=five_repo_topology["hub_root"], config=five_repo_topology["config"])
+
+    verdict_json = json.dumps(
+        {
+            "verdict": "APPROVED_WITH_CAUTION",
+            "summary": "Audited mounted main HEAD worktree successfully.",
+            "findings": [],
+            "verified_finding_ids": [],
+            "reopened_finding_ids": [],
+        }
+    )
+    # Require `models/ranker.py` and `data_access/features.py` from `main` to exist inside cwd!
+    svc.audit_worker.provider_commands = {
+        "chatgpt": (
+            f"mock:test -f models/ranker.py && test -f data_access/features.py "
+            f"&& printf '%s\\n' {shlex.quote(verdict_json)}"
+        ),
+        "claude": "mock:echo 'simulated CLI auth failure' >&2 && exit 2",
+    }
+
+    env = svc.store.send_message(
+        from_agent="chatgpt",
+        to_agents=["chatgpt", "claude"],
+        intent=Intent.AUDIT_REQUEST,
+        subject="do an audit of the latest change on main branch on quantile strategy",
+        body="Comprehensive audit of main branch.",
+        code_context=None,
+        auto_audit=True,
+    )
+
+    records = svc.audit_worker.execute_audit_for_message(env)
+    assert len(records) == 2
+
+    gpt_rec = next(r for r in records if r.reviewer == AgentId.CHATGPT)
+    claude_rec = next(r for r in records if r.reviewer == AgentId.CLAUDE)
+    assert gpt_rec.success is True
+    assert gpt_rec.reply_envelope is not None
+    assert gpt_rec.reply_envelope.verdict == AuditVerdictType.APPROVED_WITH_CAUTION
+    assert claude_rec.success is False
+
+    bundle = svc.store.get_thread(env.thread_id)
+    assert bundle is not None
+    subjects = [m.subject for m in bundle["messages"]]
+    assert any("[APPROVED_WITH_CAUTION]" in s for s in subjects)
+    assert any("[AUDIT_ERROR]" in s for s in subjects)

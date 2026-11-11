@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,12 +15,24 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+import importlib
 from src.agents.dispatcher import AgentDispatcher
+import src.bus.audit_worker as _aw_mod
+import src.bus.mcp_server as _mcp_mod
+
+if not hasattr(_aw_mod, "launch_background_audit"):
+    importlib.reload(_aw_mod)
+    importlib.reload(_mcp_mod)
+
+from src.bus.audit_worker import (
+    launch_background_audit,
+    list_audit_jobs,
+    stop_audit_job,
+)
 from src.bus.mcp_server import BusService
 from src.bus.schema import (
     EXPLICIT_TARGET_INTENTS,
     READ_ONLY_AUTO_INTENTS,
-    WORKSPACE_AGENTS,
     AgentId,
     AuditVerdictType,
     FindingStatus,
@@ -27,18 +40,19 @@ from src.bus.schema import (
     ThreadStatus,
 )
 from src.core.git_manager import GitManager
-from src.core.ideation import ContextBuilder, IdeationEngine, PromptBuilder
+from src.core.ideation import IdeationEngine
 from src.core.proposal_manager import ProposalManager
 from src.core.schema import (
     ModelName,
     ProposalStatus,
-    ReviewVerdict,
     ScorecardSummary,
     StrategyTarget,
 )
 from src.core.state_machine import ProposalStateMachine
 from src.harness.csv_parser import CSVParser, InvalidScorecardCSVError
 from src.harness.eval_bridge import EvalBridge
+
+_IS_APPTEST = ("pytest" in sys.modules) or ("streamlit.testing.v1.app_test" in sys.modules)
 
 
 def resolve_runtime_paths() -> tuple[Path, Path, Optional[Path]]:
@@ -141,6 +155,7 @@ st.set_page_config(
 runtime_root, cfg_path, override_db = resolve_runtime_paths()
 config = load_config(cfg_path)
 bus_svc = BusService(root_dir=runtime_root, config=config, db_path=override_db)
+state_dir = bus_svc.store.db_path.parent
 pm = ProposalManager(root_dir=runtime_root)
 
 workspaces_conf = config.get("workspaces", {})
@@ -173,6 +188,7 @@ eval_bridge = EvalBridge(
 dispatcher = AgentDispatcher(config=config, proposal_manager=pm, eval_bridge=eval_bridge)
 
 fleet_statuses = bus_svc.git_bridge.get_fleet_telemetry(store=bus_svc.store)
+fleet_by_name = {fs.agent.value: fs for fs in fleet_statuses}
 cap_telemetry = bus_svc.capacity.get_capacity_telemetry()
 
 # ----------------------------------------------------------------------
@@ -265,6 +281,60 @@ st.session_state["gemini_model"] = gemini_model
 if input_key:
     st.session_state["gemini_api_key"] = input_key
 
+
+# ----------------------------------------------------------------------
+# Live Background Headless Audit Monitor Fragment (Non-Blocking!)
+# ----------------------------------------------------------------------
+def _render_audit_jobs_monitor() -> None:
+    jobs = list_audit_jobs(state_dir, limit=5)
+    running_ids = {j["msg_id"] for j in jobs if j.get("status") == "RUNNING"}
+    prev_running: set[str] = set(st.session_state.get("watched_running_audit_ids", []))
+    st.session_state["watched_running_audit_ids"] = list(running_ids)
+
+    # If a previously running background audit just finished, refresh full app so Thread Timeline shows verdict!
+    if prev_running and not (prev_running <= running_ids) and not _IS_APPTEST:
+        st.rerun(scope="app")
+
+    if not jobs:
+        return
+
+    active_jobs = [j for j in jobs if j.get("status") == "RUNNING"]
+    recent_done = [j for j in jobs if j.get("status") != "RUNNING"][:1]
+
+    for job in active_jobs:
+        elapsed_s = max(0, int(time.time() - float(job.get("started_epoch", time.time()))))
+        revs = ", ".join(job.get("reviewers", []))
+        with st.container(border=True):
+            c_info, c_stop = st.columns([3.2, 1])
+            with c_info:
+                st.info(
+                    f"🔄 **Headless Audit Running** — `{job['thread_id']}` (`{job['msg_id']}`) · "
+                    f"Reviewer(s): **`{revs}`** · PID `{job.get('pid')}` · Elapsed: **`{elapsed_s}s`**"
+                )
+            with c_stop:
+                if st.button("⏹️ Stop Audit", key=f"stop_audit_{job['msg_id']}", use_container_width=True):
+                    stop_audit_job(state_dir, job["msg_id"])
+                    st.rerun()
+            tail = job.get("log_tail", "").strip()
+            st.code(tail or "Mounting clean /tmp Git worktree and starting read-only auditor...", language="bash")
+
+    if not active_jobs and recent_done:
+        last_j = recent_done[0]
+        status_lbl = last_j.get("status", "DONE")
+        res_list = last_j.get("results") or []
+        verdict_parts = [f"{r.get('reviewer')}: {r.get('verdict') or r.get('error')}" for r in res_list]
+        summary_str = " | ".join(verdict_parts) if verdict_parts else status_lbl
+        with st.expander(f"✅ Latest Headless Audit `{last_j['thread_id']}` (`{last_j['msg_id']}`): {summary_str}", expanded=False):
+            if last_j.get("log_tail"):
+                st.code(last_j["log_tail"], language="bash")
+
+
+if not _IS_APPTEST and any(j.get("status") == "RUNNING" for j in list_audit_jobs(state_dir, limit=5)):
+    render_live_audit_monitor = st.fragment(run_every=2.0)(_render_audit_jobs_monitor)
+else:
+    render_live_audit_monitor = _render_audit_jobs_monitor
+
+
 # ----------------------------------------------------------------------
 # 5 Primary Control Tower Tabs
 # ----------------------------------------------------------------------
@@ -286,16 +356,37 @@ with tab_threads:
         with st.container(border=True):
             st.subheader("📨 Explicit Audit & Message Dispatch")
             st.caption(
-                "Target reviewers must always be selected explicitly (no hidden default routing). "
-                "Read-only audits run inside isolated `/tmp` Git worktrees."
+                "Target reviewers must always be selected explicitly. "
+                "Read-only audits mount a clean `/tmp` Git worktree of the selected Code Checkout."
             )
 
-            d_sender = st.selectbox(
-                "From Agent / Checkout:",
-                ["dev", "claude", "chatgpt", "main", "staging", "human"],
+            # Display flash confirmation banner from immediate post-dispatch rerun
+            flash_notice = st.session_state.pop("last_dispatch_notice", None)
+            if flash_notice:
+                st.success(flash_notice["text"])
+                for adv_item in flash_notice.get("advisories", []):
+                    st.warning(adv_item)
+
+            from_c1, code_c2 = st.columns(2)
+            d_sender = from_c1.selectbox(
+                "Requested By (`from_agent`):",
+                ["human", "dev", "claude", "chatgpt", "main", "staging"],
                 index=0,
                 key="dispatch_from_agent",
             )
+            d_target_checkout = code_c2.selectbox(
+                "Code Checkout to Audit / Mount:",
+                ["main", "dev", "claude", "chatgpt", "staging", "none"],
+                index=0,
+                key="dispatch_target_checkout",
+            )
+            if d_target_checkout != "none" and d_target_checkout in fleet_by_name:
+                t_fs = fleet_by_name[d_target_checkout]
+                st.caption(
+                    f"📂 Mounts `{d_target_checkout}` (`{t_fs.workspace_path}`) · "
+                    f"HEAD `{t_fs.head_sha[:7]}`: *{t_fs.head_subject[:65]}*"
+                )
+
             d_intent = st.selectbox(
                 "Intent:",
                 [
@@ -311,7 +402,7 @@ with tab_threads:
             )
             d_subject = st.text_input(
                 "Subject:",
-                placeholder="e.g. Audit Stage-1 path ranker lag-1 alignment",
+                placeholder="e.g. Audit latest change on main branch on quantile strategy",
                 key="dispatch_subject",
             )
             d_body = st.text_area(
@@ -322,13 +413,13 @@ with tab_threads:
             )
             sha_c1, sha_c2 = st.columns(2)
             d_head_sha = sha_c1.text_input(
-                "Commit SHA (head_sha):",
-                placeholder="Optional commit SHA or HEAD",
+                "Commit SHA (`head_sha`):",
+                placeholder="Blank = HEAD of selected checkout",
                 key="dispatch_head_sha",
             )
             d_base_sha = sha_c2.text_input(
-                "Base SHA (base_sha):",
-                placeholder="Optional base commit SHA",
+                "Base SHA (`base_sha`):",
+                placeholder="Blank = HEAD~1 (latest commit diff)",
                 key="dispatch_base_sha",
             )
 
@@ -367,33 +458,73 @@ with tab_threads:
                     )
                 else:
                     try:
+                        eff_head = d_head_sha.strip() or None
+                        eff_base = d_base_sha.strip() or None
+
+                        # Auto-resolve HEAD / HEAD~1 on the selected Code Checkout when auditing code!
+                        if (
+                            eff_head is None
+                            and d_target_checkout != "none"
+                            and intent_obj in (Intent.AUDIT_REQUEST, Intent.REMEDIATION_READY)
+                        ):
+                            target_ws = bus_svc.git_bridge.get_workspace_path(d_target_checkout)
+                            if target_ws and target_ws.exists():
+                                eff_head = "HEAD"
+                                if eff_base is None:
+                                    try:
+                                        bus_svc.git_bridge.resolve_commit(target_ws, "HEAD~1")
+                                        eff_base = "HEAD~1"
+                                    except Exception:
+                                        eff_base = None
+
                         res = bus_svc.send_verified(
                             from_agent=d_sender,
                             to_agents=selected_targets,
                             intent=intent_obj,
                             subject=d_subject.strip(),
                             body=d_body.strip(),
-                            head_sha=d_head_sha.strip() or None,
-                            base_sha=d_base_sha.strip() or None,
+                            head_sha=eff_head,
+                            base_sha=eff_base,
+                            target_checkout=d_target_checkout,
+                            require_clean_handoff=False,
                             auto_audit=(d_mode != "Session Inbox Only" and intent_obj in READ_ONLY_AUTO_INTENTS),
-                            run_auto_audit_now=(d_mode == "Headless Read-Only Audit Now"),
+                            run_auto_audit_now=False,
                         )
                         env = res["envelope"]
-                        st.success(
-                            f"Dispatched `{env['msg_id']}` on thread `{env['thread_id']}` -> `{env['to_agents']}`!"
-                        )
-                        for adv in env.get("advisories", []):
-                            st.warning(adv)
-                        for ar in res.get("auto_audit_results", []):
-                            if ar["success"]:
-                                st.info(f"Headless audit `{ar['reviewer']}` -> `{ar['verdict']}` (`{ar['reply_msg_id']}`)")
-                            else:
-                                st.error(f"Headless audit `{ar['reviewer']}` failed: {ar['error']}")
+                        msg_id = env["msg_id"]
+                        tid = env["thread_id"]
+                        st.session_state["focus_thread_id"] = tid
+
+                        if d_mode == "Headless Read-Only Audit Now":
+                            job_meta = launch_background_audit(
+                                msg_id=msg_id,
+                                thread_id=tid,
+                                reviewers=selected_targets,
+                                root_dir=ROOT_DIR,
+                                state_dir=state_dir,
+                                config_path=cfg_path,
+                                db_path=override_db,
+                            )
+                            notice_txt = (
+                                f"Dispatched `{msg_id}` on thread `{tid}` -> `{env['to_agents']}`! "
+                                f"Headless read-only audit launched in background (PID `{job_meta['pid']}`) — "
+                                f"watch live progress on the right."
+                            )
+                        else:
+                            notice_txt = f"Dispatched `{msg_id}` on thread `{tid}` -> `{env['to_agents']}`!"
+
+                        st.session_state["last_dispatch_notice"] = {
+                            "text": notice_txt,
+                            "advisories": env.get("advisories", []),
+                        }
+                        st.rerun()
                     except Exception as exc:
                         st.error(f"Dispatch error: {exc}")
 
     with right_threads:
-        st.subheader("🧵 Thread Timeline & Findings Checklist")
+        st.subheader("🧵 Thread Timeline & Live Audit Monitor")
+        render_live_audit_monitor()
+
         status_choices = ["ALL"] + [s.value for s in ThreadStatus]
         sel_status = st.selectbox("Filter by Thread Status:", status_choices, index=0, key="thread_status_filter")
         threads = bus_svc.store.list_threads(
@@ -404,11 +535,20 @@ with tab_threads:
         if not threads:
             st.info("No threads recorded yet. Use the Dispatch panel on the left to start an audit or RFC thread.")
         else:
-            thr_map = {
-                f"{t.thread_id} [{t.status.value}] R{t.latest_round} — {t.title} (by {t.created_by.value})": t.thread_id
+            thr_labels = [
+                f"{t.thread_id} [{t.status.value}] R{t.latest_round} — {t.title} (by {t.created_by.value})"
                 for t in threads
-            }
-            sel_thr_lbl = st.selectbox("Select Thread:", list(thr_map.keys()), key="thread_select")
+            ]
+            thr_map = dict(zip(thr_labels, [t.thread_id for t in threads]))
+            focus_tid = st.session_state.get("focus_thread_id")
+            default_idx = 0
+            if focus_tid:
+                for idx_t, t_obj in enumerate(threads):
+                    if t_obj.thread_id == focus_tid:
+                        default_idx = idx_t
+                        break
+
+            sel_thr_lbl = st.selectbox("Select Thread:", thr_labels, index=default_idx, key="thread_select")
             bundle = bus_svc.store.get_thread(thr_map[sel_thr_lbl])
 
             if bundle:
@@ -416,7 +556,7 @@ with tab_threads:
                 t_msgs = bundle["messages"]
                 t_findings = bundle["findings"]
 
-                hdr_c1, hdr_c2 = st.columns([2.2, 1])
+                hdr_c1, hdr_c2, hdr_c3 = st.columns([2.0, 1.0, 1.0])
                 with hdr_c1:
                     st.markdown(
                         f"**`{t_rec.thread_id}`**: {t_rec.title}  \n"
@@ -424,6 +564,28 @@ with tab_threads:
                         f"Mirror: `{bundle['mirror_path']}`"
                     )
                 with hdr_c2:
+                    latest_auditable = next(
+                        (m for m in reversed(t_msgs) if m.intent in READ_ONLY_AUTO_INTENTS),
+                        None,
+                    )
+                    if latest_auditable and st.button(
+                        "🤖 Re-Run Headless Audit",
+                        use_container_width=True,
+                        key="rerun_thread_audit_btn",
+                    ):
+                        revs = [a.value for a in latest_auditable.to_agents if a != AgentId.HUMAN]
+                        if revs:
+                            launch_background_audit(
+                                msg_id=latest_auditable.msg_id,
+                                thread_id=t_rec.thread_id,
+                                reviewers=revs,
+                                root_dir=ROOT_DIR,
+                                state_dir=state_dir,
+                                config_path=cfg_path,
+                                db_path=override_db,
+                            )
+                            st.rerun()
+                with hdr_c3:
                     if st.button(
                         "📦 Route to Staging for Full A/A",
                         use_container_width=True,
@@ -445,7 +607,6 @@ with tab_threads:
                         )
                         st.success(f"Routed `{t_rec.thread_id}` to `staging` session inbox (`IN_STAGING`).")
 
-                # Findings table & status updater
                 if t_findings:
                     st.markdown("##### 🔍 Structured Findings Checklist (`P0` / `P1` / `P2`)")
                     f_df = pd.DataFrame(
@@ -457,6 +618,7 @@ with tab_threads:
                                 "Author": f.author_agent.value,
                                 "Location": f"{f.file}:{f.lines}" if f.file else "—",
                                 "Problem": f.problem,
+                                "Suggested Fix": f.suggested_fix,
                                 "Resolved SHA": f.resolved_in_sha or "—",
                                 "Verified By": f.verified_by.value if f.verified_by else "—",
                             }
@@ -496,12 +658,12 @@ with tab_threads:
                             st.markdown(m.body)
                         if m.code_context and m.code_context.head_sha:
                             with st.expander(
-                                f"🔎 Commit Context: `{m.code_context.head_sha[:8]}` "
+                                f"🔎 Commit Context: `{m.code_context.branch}` @ `{m.code_context.head_sha[:8]}` "
                                 f"({len(m.code_context.changed_files)} file(s))"
                             ):
                                 try:
                                     diff_data = bus_svc.git_bridge.inspect_commit(
-                                        from_agent=m.from_agent,
+                                        from_agent=m.from_agent if m.from_agent != AgentId.HUMAN else bus_svc.git_bridge.golden_agent,
                                         thread_id=m.thread_id,
                                         head_sha=m.code_context.head_sha,
                                         base_sha=m.code_context.base_sha,
@@ -557,6 +719,7 @@ with tab_threads:
                                 auto_audit=False,
                             )
                             st.success("Reply posted to thread!")
+                            st.rerun()
 
 # ======================================================================
 # TAB 2: Shared Cross-Checkout Knowledge & Research Explorer
@@ -847,20 +1010,32 @@ with tab_worker:
             st.subheader("🤖 Headless Read-Only Auto-Audit Queue")
             st.caption(
                 "Polls un-dispatched `AUDIT_REQUEST`, `PROPOSAL_RFC`, and `REMEDIATION_READY` messages "
-                "and executes them inside isolated `/tmp/rl-worktrees/`."
+                "and launches them in isolated `/tmp/rl-worktrees/` background sessions."
             )
-            if st.button("▶️ Execute Pending Read-Only Auto-Audits Now", type="primary", key="run_pending_audits_btn"):
-                records = bus_svc.audit_worker.poll_and_execute_once(limit=5)
-                if not records:
+            if st.button("▶️ Launch Pending Read-Only Auto-Audits", type="primary", key="run_pending_audits_btn"):
+                claimed = bus_svc.store.claim_pending_auto_audits(limit=5)
+                if not claimed:
                     st.info("No pending auto-audit messages in queue.")
-                for rec in records:
-                    if rec.success and rec.reply_envelope:
-                        st.success(
-                            f"`{rec.reviewer.value}` completed in {rec.duration_seconds:.1f}s -> "
-                            f"`{rec.reply_envelope.verdict.value if rec.reply_envelope.verdict else 'OK'}`"
+                else:
+                    for c_msg in claimed:
+                        revs = [a.value for a in c_msg.to_agents if a != AgentId.HUMAN]
+                        launch_background_audit(
+                            msg_id=c_msg.msg_id,
+                            thread_id=c_msg.thread_id,
+                            reviewers=revs,
+                            root_dir=ROOT_DIR,
+                            state_dir=state_dir,
+                            config_path=cfg_path,
+                            db_path=override_db,
                         )
-                    else:
-                        st.error(f"`{rec.reviewer.value}` failed: {rec.error}")
+                    st.success(f"Launched {len(claimed)} background headless audit job(s)!")
+                    st.rerun()
+
+            for j_item in list_audit_jobs(state_dir, limit=6):
+                st.caption(
+                    f"`{j_item['msg_id']}` ({j_item['thread_id']}) · `{j_item.get('status')}` · "
+                    f"PID `{j_item.get('pid')}` · Reviewers `{j_item.get('reviewers')}`"
+                )
 
         with st.container(border=True):
             st.subheader("🔒 Active Host Evaluation Leases")

@@ -109,7 +109,9 @@ class BusService:
         cc_agents: Optional[Sequence[AgentId | str]] = None,
         head_sha: Optional[str] = None,
         base_sha: Optional[str] = None,
+        target_checkout: Optional[AgentId | str] = None,
         workspace_path: Optional[Path | str] = None,
+        require_clean_handoff: bool = True,
         verdict: Optional[AuditVerdictType | str] = None,
         new_findings: Optional[Sequence[FindingInput | Dict[str, Any]]] = None,
         resolved_findings: Optional[Dict[str, str]] = None,
@@ -123,18 +125,38 @@ class BusService:
         sender = AgentId.normalize(from_agent)
         code_ctx: Optional[CodeContext] = None
         advisories: List[str] = []
+        eff_meta = dict(metadata or {})
 
-        _, _, drift_adv = self.git_bridge.get_agent_drift_advisory(sender, store=self.store)
+        code_owner = sender
+        if target_checkout and str(target_checkout).strip().lower() != "none":
+            code_owner = AgentId.normalize(target_checkout)
+            eff_meta.setdefault("target_checkout", code_owner.value)
+        elif target_checkout and str(target_checkout).strip().lower() == "none":
+            eff_meta.setdefault("target_checkout", "none")
+
+        _, _, drift_adv = self.git_bridge.get_agent_drift_advisory(
+            code_owner if code_owner != AgentId.HUMAN else self.git_bridge.golden_agent,
+            store=self.store,
+        )
         if drift_adv:
             advisories.append(drift_adv)
 
         if head_sha:
+            eff_ws = workspace_path or self.git_bridge.get_workspace_path(code_owner)
             code_ctx = self.git_bridge.verify_commit_handoff(
-                agent=sender,
+                agent=code_owner,
                 head_sha=head_sha,
                 base_sha=base_sha,
-                workspace_path=workspace_path,
+                workspace_path=eff_ws,
+                require_clean_changed_files=require_clean_handoff,
             )
+            if not require_clean_handoff and eff_ws and Path(eff_ws).exists():
+                st_res = self.git_bridge._git_ro(Path(eff_ws), ["status", "--porcelain"], check=False)
+                if st_res.returncode == 0 and st_res.stdout.strip():
+                    advisories.append(
+                        f"Advisory: checkout '{code_owner.value}' has uncommitted local files; "
+                        f"auditing committed snapshot {code_ctx.head_sha[:7]}."
+                    )
 
         envelope = self.store.send_message(
             from_agent=sender,
@@ -153,7 +175,7 @@ class BusService:
             wontfix_findings=wontfix_findings,
             proposal_id=proposal_id,
             auto_audit=auto_audit,
-            metadata=metadata,
+            metadata=eff_meta,
             extra_advisories=advisories,
         )
 
